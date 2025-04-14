@@ -322,8 +322,8 @@ El resultado de este comando es la creación de un pod. Si ejecutas `podman pod 
 Con el pod creado, vamos a lanzar ahora la base de datos PostgreSQL dentro de ese pod. Usaremos la imagen oficial de PostgreSQL de Docker Hub. Ejecuta:
 
 ```bash
-podman run -d --pod mypod --name mydb \
-  -e POSTGRES_USER=fastapi -e POSTGRES_PASSWORD=fastapi -e POSTGRES_DB=fastapidb \
+podman run -d --pod mypod --name mydb 
+  -e POSTGRES_USER=fastapi -e POSTGRES_PASSWORD=fastapi -e POSTGRES_DB=fastapidb 
   postgres:15
 ```
 
@@ -384,24 +384,21 @@ Ahora, **probemos la API y la comunicación dentro del pod**:
 - Desde el host (tu Windows), intenta abrir en un navegador web la URL [http://localhost:8000](http://localhost:8000). Como mapeamos el puerto 8000 del pod al host, deberías recibir una página con el texto `¡Hola desde FastAPI en Podman!` que proviene del contenedor `myapi`. Si lo ves, ¡genial! Estás accediendo a la aplicación contenedorizada.
 - La API (simulada) y la base de datos comparten la red interna. En una aplicación real, tu código FastAPI podría conectarse a PostgreSQL simplemente usando `localhost:5432` como host de la DB, ya que dentro del pod *localhost* es común. Podemos verificar esta conectividad con una pequeña prueba: ejecutar un comando `psql` dentro del contenedor de API o similar. Para simplificar, en lugar de instalar un cliente psql en el contenedor de API, hagamos que el host (Windows) se conecte al Postgres contenedor via localhost:
   
+(Si no tienes psql a mano, este paso es opcional; lo principal es saber que la API podría acceder al DB en `localhost:5432` dentro del pod).
   Si tienes un cliente PostgreSQL instalado en Windows (por ejemplo, `psql` en tu PATH) o puedes instalar uno rápidamente, intenta:  
   ```powershell
   psql -h localhost -p 5432 -U fastapi -d fastapidb
   ```  
   Te pedirá la contraseña (que es `fastapi`). Si se conecta correctamente, podrás ejecutar por ejemplo `\dt` (listar tablas, no habrá ninguna aún) o `SELECT 1;` para probar. Esto confirma que PostgreSQL contenedor funciona y está accesible en el puerto host 5432. Sal con `\q`.  
-  (Si no tienes psql a mano, este paso es opcional; lo principal es saber que la API podría acceder al DB en `localhost:5432` dentro del pod).
-
+  
 - Observa que no tuvimos que hacer ningún tipo de configuración de red manual entre los contenedores. Al estar en el mismo pod, la **resolución DNS interna por nombre de contenedor** también funciona: por ejemplo, el contenedor `myapi` podría resolver el hostname `mydb` y obtendría la IP interna del pod donde está PostgreSQL (y viceversa). Podman configura automáticamente un DNS interno en el pod para que los contenedores puedan encontrarse por nombre. Así que alternativamente, la app FastAPI podría conectarse a "mydb:5432". Sin embargo, usar `localhost` es sencillo porque comparten namespace de red.
 
 Resumiendo, hemos creado un pod `mypod` y desplegado dos servicios dentro de él: una base de datos PostgreSQL y una aplicación (simulada) FastAPI. Este patrón es útil para desarrollar múltiples servicios vinculados sin necesidad de un orquestador externo; los pods de Podman te permiten agruparlos lógicamente. 
 
-> **Nota:** En producción, normalmente se usaría Kubernetes u otro orquestador para administrar múltiples contenedores, pero Podman pods te permiten probar localmente una arquitectura de microservicios pequeña. También podrías usar `podman-compose` (una herramienta separada) para levantar servicios definidos en un estilo Docker Compose, pero conocer los pods nativos de Podman es valioso. 
-
-En las próximas secciones, exploraremos cómo visualizar estos contenedores y pods usando Podman Desktop, y luego pasaremos a hablar de contenedores rootless y pipeline de CI/CD local. Después culminaremos construyendo la mini aplicación FastAPI+PostgreSQL con nuestras propias imágenes.
 
 ## 5. Visualización con Podman Desktop
 
-Hasta ahora hemos interactuado con Podman principalmente a través de la línea de comandos. Sin embargo, Podman Desktop nos ofrece una interfaz gráfica útil para observar y gestionar nuestros contenedores y pods de forma más intuitiva. Vamos a utilizar Podman Desktop para inspeccionar lo que acabamos de crear y familiarizarnos con su interfaz.
+Hasta ahora hemos interactuado con Podman principalmente a través de la línea de comandos. Sin embargo, Podman Desktop nos ofrece una interfaz gráfica útil para observar y gestionar nuestros contenedores y pods de forma más intuitiva.
 
 Abre la aplicación **Podman Desktop** (si no la tenías ya abierta). En el panel lateral izquierdo, deberías ver varias secciones: *Containers*, *Images*, *Pods*, *Volumes*, *Networks*, etc. Nos centraremos en **Containers** y **Pods**.
 
@@ -427,161 +424,16 @@ En general, Podman Desktop es muy útil para visualizar rápidamente el estado d
 
 Hemos visto cómo Podman Desktop complementa la CLI para manejar contenedores y pods de forma visual.
 
-## 6. Contenedores Rootless con Podman
 
-Una de las grandes ventajas de Podman es su arquitectura **rootless**. Esto significa que **no se requieren privilegios de superusuario (root) para ejecutar contenedores**. En otras palabras, un usuario normal puede lanzar contenedores, y esos contenedores no tendrán más privilegios que los del usuario que los ejecuta en el host.
+## 6. Proyecto Final: Aplicación FastAPI + PostgreSQL en contenedores con Podman
 
-¿Por qué es esto importante? Principalmente por **seguridad**. Tradicionalmente, Docker funciona con un demonio que corre como root en el host, y los contenedores mismos típicamente se ejecutan como root dentro de su espacio aislado. Si bien hay aislamiento, ha habido vulnerabilidades que permiten escapar del contenedor; si un contenedor en Docker escapa y está corriendo como root, comprometería el sistema anfitrión con privilegios máximos. En Podman rootless, incluso si una aplicación dentro de un contenedor se escapa, se encontraría con que en el host solo tiene los permisos de un usuario sin privilegios, limitando drásticamente el posible daño.
+> **Nota:**No usar el wifi de la ual, el firewall bloquea alguna de las descargas necesarias.
 
-¿Cómo logra Podman esto? Utiliza características del kernel de Linux como **user namespaces**. Cuando lanzas un contenedor rootless, Podman mapea el usuario root dentro del contenedor a un UID no privilegiado en el host (típicamente tu UID de usuario host o un rango asignado). Así, el proceso dentro del contenedor *cree* que es root (UID 0 dentro del contenedor), pero en realidad en el host podría ser, por ejemplo, UID 1000 (tu usuario) o un sub-UID asignado. Esto permite que muchas aplicaciones dentro del contenedor que normalmente requieren ser root (por ejemplo, un servicio que abre puertos <1024, o que cambia de usuario) funcionen, pero sin otorgar privilegios reales en el host.
+Ahora construiremos una mini aplicación utilizando **FastAPI** (un framework web en Python) que interactúe con una base de datos **PostgreSQL**, todo contenerizado con Podman. Organizaremos la aplicación en dos contenedores dentro de un pod (similar a lo que hicimos en la sección de pods, pero esta vez creando nuestra propia imagen para la aplicación FastAPI en lugar de usar un contenedor de ejemplo). El objetivo es repasar todos los pasos: escribir un Dockerfile/Containerfile para la app, construir la imagen, ejecutar los servicios en un pod, probar la funcionalidad, y finalmente ver todo funcionando (también desde Podman Desktop).
 
-En nuestro entorno con WSL2, cuando instalamos Podman Desktop, la máquina Linux creada para Podman funciona en modo rootless por defect ([How to install and use Podman Desktop on Windows | Red Hat Developer](https://developers.redhat.com/articles/2023/09/27/how-install-and-use-podman-desktop-windows#:~:text=daemon%20to%20be%20running%20in,that%20supports%20both%20Podman%20and))】. De hecho, si inspeccionas los procesos, verás que los contenedores están siendo ejecutados por un usuario sin privilegios en la VM de WSL (no por root). 
+### 6.1. Preparar la aplicación FastAPI
 
-Podemos comprobar cierta información con el comando `podman info`:
-
-```bash
-podman info
-```
-
-Busca en la salida la sección `host` -> `security`. Debería haber un campo `"rootless": true` indicando que estamos en modo sin root. También suele indicar el UID mapeado. Si ejecutaras dentro de un contenedor un comando para obtener el UID real del host, verías que no es 0.
-
-Otra ventaja práctica: en Linux, para que un usuario no-root pueda ejecutar contenedores rootless, su configuración de subuids/subgids debe estar preparada. Podman Desktop en Fedora/WSL hace esto automáticamente. En una instalación manual, podrías necesitar asegurarte de que tu usuario tenga rangos de UIDs asignados en `/etc/subuid` y `/etc/subgid`. Todo esto fue resuelto por Podman Desktop, por eso no tuvimos que preocuparnos.
-
-**¿Y en Windows?** En nuestro caso Windows no tiene usuarios root de la misma manera, pero el motor Podman corre en Linux (WSL) como usuario sin privilegios. Desde la perspectiva de Windows, todo está aislado en la VM. Esto significa que incluso en Windows, usar Podman es seguro ya que no hay ningún servicio con privilegios elevados que pueda afectar al sistema Windows directamente.
-
-Además de la seguridad, hay otra ventaja: **multiusuario**. Podman permite que diferentes usuarios en la misma máquina lancen sus propios contenedores sin pisarse. No hay un demonio global al que todos deban acceder. Cada usuario tiene su instancia o podman system service si lo levanta, con sus propias imágenes y contenedores (aunque las imágenes se pueden compartir a nivel del sistema si los permisos lo permiten, pero generalmente cada rootless tiene su storage separado).
-
-> **Nota:** Docker ha introducido modos rootless también en años recientes, pero Podman fue construido con este concepto desde el inicio, por lo que la experiencia tiende a ser más fluida en Podman para escenarios rootless.
-
-En resumen, **contenedores rootless** proporcionan una capa extra de aislamiento y reducen la necesidad de permisos administrativos para trabajar con contenedores. Como desarrolladores, esto nos permite probar aplicaciones en contenedores sin pedir permisos especiales en máquinas de la empresa, por ejemplo, y sin exponer tanto el sistema. Siempre es posible que un contenedor rootless necesite algún ajuste (por ejemplo, ciertas capacidades del kernel pueden no estar disponibles sin root), pero la mayoría de las aplicaciones funcionan perfectamente.
-
-Para nuestra práctica, simplemente ten en cuenta que estás usando Podman en modo rootless. Si intentas hacer algo que requiera privilegios especiales del kernel, podrías necesitar opciones adicionales (como `--cap-add` para añadir capacidades específicas al contenedor, o en último caso correr Podman como root dentro de WSL, lo cual normalmente no hará falta). Hasta ahora, nuestros escenarios (servidores web, bases de datos) funcionan sin problemas en rootless.
-
-## 7. Simulación de un pipeline CI/CD local (Construcción y prueba de imágenes)
-
-En un entorno de **Integración Continua/Despliegue Continuo (CI/CD)**, típicamente se automatizan las tareas de construir imágenes de contenedor, ejecutar pruebas en ellas y finalmente desplegarlas o publicarlas en un registro. Podman se puede integrar en pipelines CI/CD igual que Docker (por ejemplo, usando Podman en GitHub Actions, GitLab CI, Jenkins, etc., en lugar de Docker). Pero aquí nos centraremos en **simular ese proceso localmente**, para entender cómo sería el flujo de una manera manual.
-
-Imaginemos que cada vez que hacemos un cambio en nuestra aplicación, queremos asegurarnos de que la imagen de contenedor se construye correctamente y que la aplicación funciona (al menos pasa unos tests básicos). Los pasos clave de un pipeline de contenedores podrían ser:
-
-1. **Construir la imagen** a partir del código actualizado.
-2. **Lanzar contenedores de prueba** para verificar que la imagen funciona. Esto puede incluir:
-   - Ejecutar tests automatizados dentro del contenedor (por ejemplo, pruebas unitarias).
-   - Desplegar el contenedor en un entorno de prueba y ejecutar pruebas de integración (por ejemplo, hacer solicitudes HTTP a la API y comprobar respuestas).
-3. **Opcional: Analizar la imagen** (escaneo de vulnerabilidades, tamaño, etc.) y **publicar la imagen** en un registro si todo va bien.
-4. **Limpiar** los contenedores de prueba.
-
-Vamos a hacer una versión simplificada: usaremos nuestra aplicación en contenedor para demostrar cómo comprobar su funcionamiento automáticamente.
-
-Sigamos con el ejemplo del pod `mypod` que creamos (FastAPI + PostgreSQL). Supongamos que esa es nuestra aplicación. Un pipeline local sencillo podría:
-
-- Reconstruir la imagen de la API (en caso de cambios).
-- Arrancar el pod (o contenedores) con la nueva imagen.
-- Ejecutar una comprobación: por ejemplo, hacer una petición HTTP a la API y esperar cierta respuesta.
-- Detener/eliminar los contenedores de prueba.
-
-Vamos a simular esto con comandos. Cerremos/eliminemos el pod anterior para empezar "limpios":
-
-```bash
-# Detener y eliminar el pod mypod si sigue existiendo
-podman pod stop mypod
-podman pod rm mypod
-```
-
-Asumamos que tenemos el código de la API y el Containerfile listos (en el siguiente apartado lo prepararemos). De momento, usemos el mismo `hashicorp/http-echo` como si fuera "nuestra" imagen de app para la prueba CI/CD.
-
-### 7.1. Construcción de imagen (fase Build)
-
-Si hubiéramos hecho cambios en el código de la API, aquí reconstruiríamos la imagen. Por ejemplo, más adelante construiremos `fastapi-app:1.0`. En un pipeline podríamos hacer:
-
-```bash
-podman build -t fastapi-app:1.0 .
-```
-
-(Suponiendo el Containerfile correcto en el dir actual). Esto generaría la nueva imagen con los cambios.
-
-### 7.2. Despliegue en entorno de prueba (fase Deploy/Test)
-
-Ahora, lanzaríamos contenedores con la imagen para probar. Podríamos recrear el pod:
-
-```bash
-podman pod create -n testpod -p 8000:8000 -p 5432:5432
-```
-
-Luego lanzar los servicios:
-
-```bash
-# Base de datos
-podman run -d --pod testpod --name dbtest \
-  -e POSTGRES_USER=fastapi -e POSTGRES_PASSWORD=fastapi -e POSTGRES_DB=fastapidb \
-  postgres:15
-
-# API (aquí usaríamos la imagen recien construida; como no la tenemos en este instante, usamos http-echo a modo de ejemplo)
-podman run -d --pod testpod --name apitest \
-  hashicorp/http-echo:0.2.3 -listen=:8000 -text="CI Test OK"
-```
-
-En un pipeline real, en vez de `hashicorp/http-echo...` sería algo como:
-```bash
-podman run -d --pod testpod --name apitest fastapi-app:1.0
-```
-para lanzar la imagen recién construida de nuestra aplicación FastAPI.
-
-Luego, el pipeline esperaría un momento a que los servicios se inicien (especialmente la DB) y ejecutaría pruebas. Podría ser tan sencillo como hacer un curl desde el host hacia la API:
-
-```bash
-curl -s http://localhost:8000
-```
-
-**Explicación:** Usamos `-s` (silent) para que curl no muestre progreso, solo la respuesta. Este comando devolverá el cuerpo HTTP de la respuesta de la API. En nuestro ejemplo, debería devolver "CI Test OK". En una API real FastAPI, quizás devuelva un JSON `{"message": "Hello, world"}` o algo conocido.
-
-Podríamos integrar esto en un script y verificar el contenido. Por ejemplo, en pseudocódigo bash:
-
-```bash
-RESPONSE=$(curl -s http://localhost:8000)
-if [[ "$RESPONSE" == *"CI Test OK"* ]]; then
-  echo "Prueba pasada: la respuesta de la API es la esperada."
-  EXIT_CODE=0
-else
-  echo "Prueba fallida: la respuesta de la API no es la esperada."
-  EXIT_CODE=1
-fi
-```
-
-Si tuviéramos endpoints más específicos o tests unitarios, podríamos ejecutarlos aquí. Por ejemplo, podríamos tener un contenedor separado que corra `pytest` contra la aplicación (si la imagen incluye los tests), o podríamos usar `podman exec` para ejecutar comandos dentro del contenedor en marcha.
-
-- *Ejemplo con `podman exec`:* Si nuestra imagen de FastAPI tuviera pruebas unitarias en el código, podríamos hacer:  
-  `podman exec apitest pytest /app/tests` (esto ejecutaría pytest dentro del contenedor `apitest`). El resultado (exit code) de ese comando nos diría si pasaron las pruebas unitarias.
-
-Para mantener las cosas simples, nos quedamos con la idea del curl como test de integración básico.
-
-### 7.3. Limpieza post-prueba
-
-Una vez realizadas las pruebas, el pipeline apagaría y eliminaría los contenedores/pod para limpiar recursos:
-
-```bash
-podman pod stop testpod
-podman pod rm testpod
-```
-
-Y si la construcción y pruebas fueron exitosas, se pasaría quizás a publicar la imagen (ej: `podman push fastapi-app:1.0 <registro>`). Si fallaron, se aborta el pipeline y no se publica nada.
-
-### 7.4. Automatización
-
-Podman puede integrarse en scripts Shell, Makefiles o archivos de pipeline CI fácilmente. No tiene un demonio separado, así que los comandos `podman build` y `podman run` se pueden ejecutar en cualquier entorno que tenga Podman instalado (incluyendo contenedores de builder en GitHub Actions, etc.). 
-
-En local, podrías escribir un **script de prueba** que haga todo lo anterior de forma automática. Por ejemplo, un script `test_app.sh` que construya la imagen, levante los contenedores de test, ejecute curl, analice la respuesta y al final limpie. Este script podría usarse para validar cambios rápidamente antes de commitear, simulando lo que hará el CI.
-
-> **Nota:** Asegúrate de no dejar contenedores colgando en caso de falla. Podman permite usar `podman run --rm` para que contenedores se autodestruyan al terminar, aunque en nuestro caso los contenedores de servicios no terminan solos. Otra técnica es usar `trap` en bash para que al recibir SIGINT/SIGTERM se limpien los recursos (útil si abortas manualmente). Estas prácticas de scripting aseguran que siempre partas de un estado limpio.
-
-Con esto, hemos simulado cómo sería un pipeline CI/CD local para nuestras aplicaciones contenerizadas. En la práctica, herramientas como **GitHub Actions** podrían ejecutar comandos Podman en runners de Linux (requiriendo instalar Podman en el runner, o usando acciones específicas). La ventaja de Podman es que al no necesitar privilegios, es más sencillo ejecutarlo en entornos limitados sin dar permisos de root (muchos servicios CI limitan la capacidad de usar Docker por temas de privilegios; Podman puede funcionar en rootless mode ahí).
-
-## 8. Proyecto Final: Aplicación FastAPI + PostgreSQL en contenedores con Podman
-
-Llegamos al ejercicio integrador. Ahora construiremos una mini aplicación utilizando **FastAPI** (un framework web en Python) que interactúe con una base de datos **PostgreSQL**, todo contenerizado con Podman. Organizaremos la aplicación en dos contenedores dentro de un pod (similar a lo que hicimos en la sección de pods, pero esta vez creando nuestra propia imagen para la aplicación FastAPI en lugar de usar un contenedor de ejemplo). El objetivo es repasar todos los pasos: escribir un Dockerfile/Containerfile para la app, construir la imagen, ejecutar los servicios en un pod, probar la funcionalidad, y finalmente ver todo funcionando quizá a través de Podman Desktop también.
-
-### 8.1. Preparar la aplicación FastAPI
-
-Primero, creemos una sencilla aplicación FastAPI. Esta aplicación tendrá un par de endpoints: uno de saludo para verificar que funciona y otro que intente leer algo de la base de datos (por ejemplo, la versión de PostgreSQL o una tabla ficticia) para comprobar la integración.
+Primero, creamos una sencilla aplicación FastAPI. Esta aplicación tendrá un par de endpoints: uno de saludo para verificar que funciona y otro que intente leer algo de la base de datos (por ejemplo, la versión de PostgreSQL o una tabla ficticia) para comprobar la integración.
 
 **Archivos de la aplicación:**
 
@@ -645,7 +497,7 @@ def get_db_version():
   - `GET /db-version` – intenta conectarse a la base de datos PostgreSQL usando psycopg2 y ejecutar `SELECT version();` (una consulta que devuelve la versión del servidor PostgreSQL). Retorna esa versión en un JSON. Si hay algún error (por ejemplo, conexión rechazada), captura la excepción y la devuelve en el campo "error". Esto nos sirve para verificar la comunicación con la base de datos.
 - Notar que estamos usando la interfaz sincrónica de psycopg2 dentro de una función FastAPI regular (no async). Esto está bien para una prueba sencilla, aunque en producción uno podría usar asyncpg o SQLAlchemy async. Pero mantengámoslo simple.
 
-### 8.2. Escribir el Dockerfile/Containerfile para la aplicación FastAPI
+### 6.2. Escribir el Dockerfile/Containerfile para la aplicación FastAPI
 
 En el mismo directorio `fastapi-app`, crearemos un `Containerfile` (o Dockerfile) para empaquetar nuestra aplicación en una imagen de contenedor:
 
@@ -682,7 +534,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 - `EXPOSE 8000` documenta que el contenedor expone el puerto 8000 (esto no hace el mapeo, pero algunas herramientas pueden leerlo; Podman Desktop por ejemplo lo muestra).
 - Por último, definimos el CMD para arrancar Uvicorn server sirviendo nuestra app (`main:app` refiere al objeto `app` en el módulo `main.py`). Ponemos host 0.0.0.0 para que Uvicorn escuche en todas las interfaces dentro del contenedor (necesario para poder atender conexiones externas al contenedor), y puerto 8000.
 
-### 8.3. Construir la imagen de la aplicación FastAPI
+### 6.3. Construir la imagen de la aplicación FastAPI
 
 Con todos los archivos preparados (`requirements.txt`, `main.py`, `Containerfile`), procedemos a construir la imagen:
 
@@ -702,7 +554,7 @@ Si todo sale bien, obtendrás un mensaje de éxito con la imagen `fastapi-app:1.
 
 Verifica con `podman images` que `fastapi-app` aparece en la lista.
 
-### 8.4. Ejecutar la aplicación y base de datos en un pod con Podman
+### 6.4. Ejecutar la aplicación y base de datos en un pod con Podman
 
 Ahora vamos a desplegar nuestra solución completa. Creamos un nuevo pod (por ejemplo, "myapppod") y lanzamos PostgreSQL y nuestra app FastAPI en él.
 
@@ -714,8 +566,8 @@ podman pod create -n myapppod -p 8000:8000 -p 5432:5432
 Ahora, contenedor de base de datos (Postgres):
 
 ```bash
-podman run -d --pod myapppod --name myapppg \
-  -e POSTGRES_USER=fastapi -e POSTGRES_PASSWORD=fastapi -e POSTGRES_DB=fastapidb \
+podman run -d --pod myapppod --name myapppg 
+  -e POSTGRES_USER=fastapi -e POSTGRES_PASSWORD=fastapi -e POSTGRES_DB=fastapidb 
   postgres:15
 ```
 
@@ -724,15 +576,12 @@ Igual que antes, esto inicia Postgres. Espera unos segundos para que inicialice.
 Finalmente, contenedor de la aplicación FastAPI:
 
 ```bash
-podman run -d --pod myapppod --name myapi \
-  -e POSTGRES_USER=fastapi -e POSTGRES_PASSWORD=fastapi -e POSTGRES_DB=fastapidb -e DB_HOST=localhost \
-  fastapi-app:1.0
+podman run -d --pod myapppod --name myapi -e POSTGRES_USER=fastapi -e POSTGRES_PASSWORD=fastapi -e POSTGRES_DB=fastapidb fastapi-app:1.0
 ```
 
 **Explicación:**  
 Estamos pasando las variables de entorno necesarias a la app:
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` para que el contenedor de la app conozca las mismas credenciales que usamos en la DB.
-- `DB_HOST=localhost` porque dentro del pod, la DB es accesible en "localhost" (comparten red). Alternativamente, podríamos poner `DB_HOST=myapppg` y funcionaría también porque el DNS interno del pod resolvería `myapppg` al IP del contenedor DB, pero es sencillo usar localhost en pods.
   
 Nuestra app leerá estas variables en `main.py` y usará psycopg2 para conectarse.
 
@@ -777,7 +626,7 @@ Podemos comprobar:
 - Probamos que la API responde y puede acceder a la base de datos.
 - Utilizamos Podman Desktop para visualizar y administrar los recursos de forma gráfica.
 
-### 8.5. Limpieza y consideraciones finales
+### 6.5. Limpieza y consideraciones finales
 
 Para cerrar la práctica, puedes detener y eliminar el pod `myapppod` cuando ya no lo necesites:
 
@@ -788,11 +637,4 @@ podman pod rm myapppod
 
 Esto apagará tanto la app como la base de datos y removerá el pod. Las imágenes `fastapi-app:1.0` y `postgres:15` permanecerán en tu sistema local hasta que decidas borrarlas (`podman rmi fastapi-app:1.0 postgres:15` si quisieras).
 
-En un contexto real, podrías extender esta mini app: por ejemplo añadiendo más endpoints, modelos de datos, incluso otro microservicio en el pod (aunque usualmente en arquitectura de microservicios cada servicio tendría su propio pod, aquí solo juntamos API+DB por conveniencia). También podrías usar **volúmenes** de Podman para persistir los datos de PostgreSQL (ahora mismo, la DB se guarda dentro del contenedor; si eliminas el contenedor, los datos se pierden. Un volumen montado permitiría que los datos sobrevivan). Podman maneja volúmenes de forma similar a Docker (`podman volume create` y `-v volume_name:/path` en run).
-
-Otro punto: **Kubernetes YAML**. Podman permite generar un manifiesto YAML de Kubernetes desde un pod existente con `podman generate kube <pod>` que produce la especificación (Deployment/Pod/Service) correspondiente. Esto es útil si deseas migrar lo que has probado localmente a un cluster real. Podman Desktop incluso tiene un botón "Play Kubernetes YAML" para aplicar un YAML (aunque localmente lo ejecutaría en Podman, o en Kind si lo tienes configurado).
-
-**Resumen**: En esta guía de ~2 horas, cubrimos la teoría de contenedores, instalamos Podman y Podman Desktop en Windows, construimos contenedores simples, manejamos contenedores y pods con Podman CLI, visualizamos recursos con Podman Desktop, entendimos la importancia de rootless, simulamos un pipeline CI/CD, y finalmente desarrollamos una pequeña aplicación FastAPI con su base de datos en contenedores, todo ello paso a paso y con explicaciones detalladas. 
-
-Esperamos que esta práctica te haya dado una comprensión sólida de cómo trabajar con contenedores usando Podman, preparándote para usar estas herramientas en proyectos futuros y explorando alternativas modernas a Docker en entornos de desarrollo y despliegue.
-
+**Resumen**: En esta guía de ~2 horas, cubrimos la teoría de contenedores, instalamos Podman y Podman Desktop en Windows, construimos contenedores simples, manejamos contenedores y pods con Podman CLI, visualizamos recursos con Podman Desktop y finalmente desarrollamos una pequeña aplicación FastAPI con su base de datos en contenedores, todo ello paso a paso y con explicaciones detalladas. 
